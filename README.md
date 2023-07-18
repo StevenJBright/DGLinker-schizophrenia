@@ -19,7 +19,7 @@ This script contains the code for identifying the top 20 Revigo-grouped biologic
 ### GWAS validation
 This script contains the code for identifying the novel validated genes for each of the predicted gene sets after they have been mapped to genes using FUMA's SNP2GENE tool (see 'Filtering SNPs' script). It also contains the code for preparing the text files used to perform gene-set analysis with each of the predicted gene sets.
 
-### Predicted_genes_DGLinker_vs_bed_files
+### Predicted genes DGLinker vs BED files
 This script contains the code for exploring the predicted genes listed by DGLinker for each submission and the associated BED files that DGLinker provides for these genes. The two did not perfectly overlap, which this script sought to explore.
 
 ### Predicted genes summary
