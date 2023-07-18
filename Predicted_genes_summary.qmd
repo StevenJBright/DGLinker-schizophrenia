@@ -1,0 +1,241 @@
+---
+title: "Predicted_genes_summary"
+author: "Steven"
+format: html
+editor: visual
+---
+
+```{r Clean global environment}
+remove(list = ls())
+```
+
+```{r Load packages}
+library(data.table)
+library(tidyverse)
+```
+
+```{r Source in credentials file}
+source("../credentials.r")
+```
+
+# Read in data
+
+```{r Predicted genes file}
+predicted_genes_raw <- read_csv(
+  file = paste0(
+    analysis_folder_path,
+    "Predicted_genes_summary_raw.csv"
+  )
+)
+
+# Check
+predicted_genes_raw %>% 
+  dim()
+
+predicted_genes_raw %>% 
+  head()
+```
+
+```{r Create list of predicted schizophrenia genes with NAs removed}
+# For each column, remove NA's and save in list format
+DGLinker_predicted_genes <- predicted_genes_raw %>% 
+  map(~ na.omit(.x))
+
+# Rename list headers
+gene_list_names <- c(
+  "GWAS",
+  "DisGeNET",
+  "Clinvar",
+  "Union"
+)
+
+names(DGLinker_predicted_genes) <- gene_list_names
+
+# Check list
+DGLinker_predicted_genes %>% 
+  str()
+```
+
+```{r Create df with the common predicted genes across every list}
+# Find the intersection of the four gene lists
+common_predicted_genes <- Reduce(intersect, DGLinker_predicted_genes) %>% 
+  as_tibble()
+
+# Check
+common_predicted_genes %>% 
+  dim()
+
+common_predicted_genes %>% 
+  head()
+```
+
+```{r Merge predicted genes into a single column}
+complete_gene_list <- tibble(genes = c(t(predicted_genes_raw)))
+
+# Check
+complete_gene_list %>% 
+  dim()
+
+complete_gene_list %>% 
+  head()
+```
+
+```{r Find the unique predicted genes}
+unique_predicted_genes <- complete_gene_list %>% 
+  unique(.)
+
+# Check
+unique_predicted_genes %>% 
+  dim()
+
+unique_predicted_genes %>% 
+  head()
+```
+
+```{r Clean NAs in unique predicted genes}
+sum(is.na(unique_predicted_genes))
+
+# Remove na
+unique_predicted_genes <- unique_predicted_genes %>% 
+  na.omit()
+
+# Re-check
+sum(is.na(unique_predicted_genes))
+```
+
+```{r Create boolean vectors for gene apperance in}
+# GWAS genes
+GWAS_predicted_gene <- unique_predicted_genes$genes %in% predicted_genes_raw$GWAS_predicted_genes
+
+# DisGeNET genes
+disgenet_predicted_gene <- unique_predicted_genes$genes %in% predicted_genes_raw$DisGeNET_predicted_genes
+
+# Clinvar genes
+clinvar_predicted_gene <- unique_predicted_genes$genes %in% predicted_genes_raw$Clinvar_predicted_genes
+
+# Union genes
+union_predicted_gene <- unique_predicted_genes$genes %in% predicted_genes_raw$Union_predicted_genes
+
+# Common predicted genes
+common_predicted_genes <- unique_predicted_genes$genes %in% common_predicted_genes$value
+```
+
+```{r Append booleans gene vectors to unique predicted genes df}
+predicted_gene_summary <- unique_predicted_genes %>% 
+  cbind(
+    GWAS_predicted_gene,
+    disgenet_predicted_gene,
+    clinvar_predicted_gene,
+    union_predicted_gene,
+    common_predicted_genes
+)
+
+# Check
+which(is.na(predicted_gene_summary))
+
+predicted_gene_summary %>% 
+  head()
+```
+
+```{r Write predicted genes summary file}
+write_csv(
+  predicted_gene_summary,
+  file = paste0(
+    analysis_folder_path,
+    "Predicted_gene_summary.csv"
+  )
+)
+```
+
+# Create csv summarising input genes
+
+```{r Read file listing input genes for each definition}
+input_genes_raw <- read_csv(
+  file = paste0(
+    analysis_folder_path,
+    "Gene lists/Union/Union_genes.csv"
+  )
+)
+
+# Check
+input_genes_raw %>% 
+  dim()
+
+input_genes_raw %>% 
+  head()
+```
+
+```{r Merge input genes into a single column}
+complete_input_gene_list <- tibble(genes = c(t(input_genes_raw)))
+
+# Check
+complete_input_gene_list %>% 
+  dim()
+
+complete_input_gene_list %>% 
+  head()
+```
+
+```{r Find the unique predicted genes}
+unique_input_genes <- complete_input_gene_list %>% 
+  unique(.)
+
+# Check
+unique_input_genes %>% 
+  dim()
+
+unique_input_genes %>% 
+  head()
+```
+
+```{r Clean NAs in unique predicted genes}
+sum(is.na(unique_input_genes))
+
+# Remove na
+unique_input_genes <- unique_input_genes %>% 
+  na.omit()
+
+# Re-check
+sum(is.na(unique_input_genes))
+```
+
+```{r Create boolean vectors for gene apperance in input genes}
+# GWAS genes
+GWAS_input_gene <- unique_input_genes$genes %in% input_genes_raw$GWAS_genes
+
+# DisGeNET genes
+disgenet_input_gene <- unique_input_genes$genes %in% input_genes_raw$DisGeNET_genes
+
+# Clinvar genes
+clinvar_input_gene <- unique_input_genes$genes %in% input_genes_raw$Clinvar_genes
+
+# Union genes
+union_input_gene <- unique_input_genes$genes %in% input_genes_raw$Union_genes
+```
+
+```{r Append booleans gene vectors to unique predicted genes df}
+input_gene_summary <- unique_input_genes %>% 
+  cbind(
+    GWAS_input_gene,
+    disgenet_input_gene,
+    clinvar_input_gene,
+    union_input_gene
+)
+
+# Check
+input_gene_summary %>% 
+  dim()
+
+input_gene_summary %>% 
+  head()
+```
+
+```{r Write input gene summary to a csv file}
+write_csv(
+  input_gene_summary,
+  file = paste0(
+    analysis_folder_path,
+    "Input_gene_summary.csv"
+  )
+)
+```

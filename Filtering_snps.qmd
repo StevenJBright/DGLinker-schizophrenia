@@ -1,0 +1,839 @@
+---
+title: "Filtering SNPs"
+author: "Steven Bright"
+format: html
+editor: visual
+---
+
+# Set-up
+
+```{r Clean global environment}
+remove(list = ls())
+```
+
+```{r Load packages}
+library(data.table)
+library(tidyverse)
+```
+
+```{r source credentials file}
+source("../credentials.r")
+```
+
+# Pre-processing of BED files of predicted genes
+
+```{r Create file paths to predicted genes by DGLinker for each list}
+GWAS_predicted_genes_path <- paste0(
+  analysis_folder_path,
+  "DGlinker results/GWAS_gene_results/results_genomic_regions/predicted_genes_hg19.bed"
+)
+
+DisGeNET_predicted_genes_path <- paste0(
+  analysis_folder_path,
+  "DGlinker results/DisGeNET_gene_results/results_genomic_regions/predicted_genes_hg19.bed"
+)
+
+Clinvar_predicted_genes_path <- paste0(
+  analysis_folder_path,
+  "DGlinker results/Clinvar_gene_results/results_genomic_regions/predicted_genes_hg19.bed"
+)
+
+Union_predicted_genes_path <- paste0(
+  analysis_folder_path,
+  "DGlinker results/Union_gene_results/results_genomic_regions/predicted_genes_hg19.bed"
+)
+```
+
+```{r Save path names to predicted gene coordinate files into a vector}
+predicted_gene_file_paths <- c(
+  GWAS_predicted_genes = GWAS_predicted_genes_path,
+  DisGeNET_predicted_genes = DisGeNET_predicted_genes_path,
+  Clinvar_predicted_genes = Clinvar_predicted_genes_path,
+  Union_predicted_genes = Union_predicted_genes_path
+)
+```
+
+```{r Read in predicted gene files}
+predicted_gene_files <- predicted_gene_file_paths %>% 
+  map(~ read.table(.x))
+
+# Check list
+predicted_gene_files %>% 
+  str()
+```
+
+```{r Rename the columns of all the lists}
+predicted_gene_files <- predicted_gene_files %>% 
+  map(
+    ~ .x %>% 
+        rename(
+          "Chromosome" = V1,
+          "Left_coordinate_hg19" = V2,
+          "Right_coordinate_hg19" = V3,
+          "Predicted_gene" = V4
+               )
+      )
+
+# Check result
+predicted_gene_files %>% 
+  map(colnames)
+```
+
+```{r Create function to clean chromosome column}
+clean_chromosome_col <- function(df, chrom_col){
+  
+  # Filter out result with CHROM == "chr6_ssto_hap7"
+  df <- df %>% 
+    filter({{ chrom_col }} != "chr6_ssto_hap7")
+
+  # Remove "chr" such that only chromosome number or letter is used
+  df <- df %>% 
+    mutate({{ chrom_col }} :=
+             str_replace_all(
+               string = {{ chrom_col }},
+               pattern = "chr", # Replace chr with empty space
+               replacement = ""
+               )
+           )
+  
+  # Turn chromosome column into a factor
+  df <- df %>% 
+    mutate({{ chrom_col }} :=
+             factor({{ chrom_col }},
+                    levels = c(
+                      "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", 
+                      "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", 
+                      "21", "22", "X", "Y"
+                      )
+                    )
+           )
+  
+  # Return df with newly formatted chromosome column
+  return(df)
+}
+```
+
+```{r Format chromosome column in every predicted gene bed file}
+predicted_gene_files <- predicted_gene_files %>% 
+  map(clean_chromosome_col,
+      Chromosome)
+
+predicted_gene_files %>% 
+  map(~ .x %>% 
+        select(Chromosome) %>% 
+        arrange(Chromosome) %>% 
+        unique(.)
+      )
+```
+
+```{r Filter out chromosome equal to X or Y}
+predicted_gene_files <- predicted_gene_files %>% 
+  map(filter,
+      Chromosome != "X" & Chromosome != "Y")
+
+# Check X and Y chromosome genes have been filtered out
+predicted_gene_files %>% 
+  map(count,
+      Chromosome)
+```
+
+**Note:** The predicted schizophrenia-linked genes in the DGLinker results file, and the predicted genes listed in the bed files with their hg19 human reference genome coordinates, do not match. Therefore, we want to remove any excess genes that appear in the bed files that do not appear in the DGLinker results file so that we only have the coordinate information about the predicted schizophrenia-linked genes.
+
+```{r Read in predicted genes from each gene list definition}
+predicted_schizophrenia_genes <- read_csv(
+  paste0(
+    analysis_folder_path,
+    "Predicted_genes_summary_raw.csv"
+  )
+)
+
+# Check
+predicted_schizophrenia_genes %>% 
+  dim()
+
+predicted_schizophrenia_genes %>% 
+  head()
+```
+
+```{r Create list of predicted schizophrenia genes with NAs removed}
+# For each column, remove NA's and save in list format
+predicted_schizophrenia_gene_list <- predicted_schizophrenia_genes %>% 
+  map(~ na.omit(.x))
+
+# Rename list headers
+gene_list_names <- c(
+  "GWAS",
+  "DisGeNET",
+  "Clinvar",
+  "Union"
+)
+
+names(predicted_schizophrenia_gene_list) <- gene_list_names
+
+# Check list
+predicted_schizophrenia_gene_list %>% 
+  str()
+```
+
+```{r Remove predicted genes from bed files that are not in DGLinker results}
+# Filter genes in each bed file to ones appearing in predicted genes by DGLinker
+predicted_gene_files <- predicted_gene_files %>% 
+  map2(predicted_schizophrenia_gene_list,
+       ~ .x %>% 
+        filter(Predicted_gene %in% .y))
+
+# Check N genes for each list
+predicted_gene_files %>% 
+  map(nrow)
+```
+
+```{r Save all of the individual tibbles to the global environment}
+list2env(predicted_gene_files, .GlobalEnv)
+```
+
+# Find common predicted genes
+
+We also want to perform a GWAS validation of the genes that have been predicted to be associated with schizophrenia in every list. Therefore, we need to make a df containing the genes that were predicted to be associated with schizophrenia in every list.
+
+```{r Create df with genes predicted to be linked to schizophrenia in every list}
+# Find the intersection of the four gene lists
+common_predicted_genes <- Reduce(intersect, predicted_gene_files) %>% 
+  as_tibble()
+
+# Check
+common_predicted_genes %>% 
+  dim()
+
+common_predicted_genes %>% 
+  head()
+```
+
+# BED files: Remove genes with duplicate start/end transcripts
+
+```{r Create function to find genes with duplicate start/end transcripts}
+find_duplicated_coords <- function(df){
+  duplicated_coords_summary <- df %>% 
+    group_by(Left_coordinate_hg19, Right_coordinate_hg19) %>% 
+    mutate(duplicate = n()>1) %>% 
+    ungroup() %>% 
+    filter(duplicate == TRUE) %>% 
+    arrange(desc(Left_coordinate_hg19))
+  
+  return(duplicated_coords_summary)
+}
+```
+
+```{r Create not in function}
+'%not_in%' <- Negate('%in%')
+```
+
+## GWAS BED file
+
+```{r Find predicted genes with duplicated coordinates in GWAS list}
+find_duplicated_coords(
+  df = GWAS_predicted_genes
+)
+```
+
+```{r Remove duplicated predicted genes in GWAS list}
+# Create vector of duplicated genes
+duplicate_GWAS_pred_genes <- c(
+  "DISC1",
+  "CTNND1",
+  "NME1"
+)
+
+GWAS_predicted_genes <- GWAS_predicted_genes %>% 
+  filter(Predicted_gene %not_in% duplicate_GWAS_pred_genes)
+
+# Check
+duplicate_GWAS_pred_genes %in% GWAS_predicted_genes$Predicted_gene
+```
+
+## DisGeNET BED file
+
+```{r Find predicted genes with duplicated coordinates in DisGeNET list}
+find_duplicated_coords(
+  df = DisGeNET_predicted_genes
+)
+```
+
+```{r Remove duplicated predicted genes in DisGeNET list}
+# Create vector of duplicated genes
+duplicate_DisGeNET_pred_genes <- c(
+  "NME1",
+  "IGF2"
+)
+
+DisGeNET_predicted_genes <- DisGeNET_predicted_genes %>% 
+  filter(Predicted_gene %not_in% duplicate_DisGeNET_pred_genes)
+
+# Check
+duplicate_DisGeNET_pred_genes %in% DisGeNET_predicted_genes$Predicted_gene
+```
+
+## Clinvar BED file
+
+```{r Find predicted genes with duplicated coordinates in Clinvar list}
+find_duplicated_coords(
+  df = Clinvar_predicted_genes
+)
+```
+
+```{r Remove duplicated predicted genes in Clinvar list}
+# Create vector of duplicated genes
+duplicate_Clinvar_pred_genes <- c(
+  "DISC1"
+)
+
+Clinvar_predicted_genes <- Clinvar_predicted_genes %>% 
+  filter(Predicted_gene %not_in% duplicate_Clinvar_pred_genes)
+
+# Check
+duplicate_Clinvar_pred_genes %in% Clinvar_predicted_genes$Predicted_gene
+```
+
+## Union BED file
+
+```{r Find predicted genes with duplicated coordinates in Union list}
+find_duplicated_coords(
+  df = Union_predicted_genes
+)
+```
+
+```{r Remove duplicated predicted genes in Union list}
+# Create vector of duplicated genes
+duplicate_Union_pred_genes <- c(
+  "CTNND1",
+  "NME1",
+  "FKBP1A"
+)
+
+Union_predicted_genes <- Union_predicted_genes %>% 
+  filter(Predicted_gene %not_in% duplicate_Union_pred_genes)
+
+# Check
+duplicate_Union_pred_genes %in% Union_predicted_genes$Predicted_gene
+```
+
+```{r Read in the known genes that were submitted to DGLinker for each list}
+training_genes <- read_csv(
+  file = paste0(
+    analysis_folder_path,
+    "Gene lists/Union/Union_genes.csv"
+  )
+)
+
+training_genes <- training_genes %>% 
+  map(~ na.omit(.x))
+
+# Rename list headers
+training_gene_list_names <- c(
+  "GWAS_training_genes",
+  "DisGeNET_training_genes",
+  "Clinvar_training_genes",
+  "Union_training_genes"
+)
+
+names(training_genes) <- training_gene_list_names
+
+training_genes %>% 
+  str()
+```
+
+```{r Check whether predicted genes are in the training genes for each list}
+GWAS_predicted_genes$Predicted_gene %in% training_genes$GWAS_training_genes %>% 
+  summary()
+
+DisGeNET_predicted_genes$Predicted_gene %in% training_genes$DisGeNET_training_genes %>% 
+  summary()
+
+Clinvar_predicted_genes$Predicted_gene %in% training_genes$Clinvar_training_genes %>% 
+  summary()
+
+Union_predicted_genes$Predicted_gene %in% training_genes$Union_training_genes %>% 
+  summary()
+```
+
+## Common predicted genes BED file
+
+*Note:* All genes in common predicted genes are unique. No duplicates to be removed.
+
+```{r Find genes with duplicated coordinates in common predicted genes}
+find_duplicated_coords(
+  df = common_predicted_genes
+)
+
+# Check genes in common predicted genes are unique
+length(unique(common_predicted_genes$Predicted_gene)) == length(common_predicted_genes$Predicted_gene)
+```
+
+# Pre-processing schizophrenia GWAS summary data
+
+```{r Read GWAS summary statistics data}
+# CORE PGC dataset
+GWAS_summary_statistics <- read_tsv(
+  paste0(
+    analysis_folder_path,
+    "PGC3_SCZ_wave3.core.autosome.public.v3.vcf.tsv"
+  ),
+  skip = 73 # Column headers begin on line 74
+)
+
+# Check
+GWAS_summary_statistics %>% 
+  dim()
+
+GWAS_summary_statistics %>% 
+  head()
+```
+
+```{r Check how many unique SNPs are in the GWAS summary statistics}
+# Find unique SNPs in GWAS summary stats and get SNP count
+unique_snps_count <- unique(GWAS_summary_statistics$ID) %>% 
+  length()
+
+# Check whether unique SNP count is equal to the no. of rows in original file
+unique_snps_count
+unique_snps_count == nrow(GWAS_summary_statistics) # TRUE
+```
+
+```{r Check NA's in GWAS summary stats}
+# Check overall missignness
+sum(is.na(GWAS_summary_statistics))
+
+# Check no. of missing values in POS column
+sum(is.na(GWAS_summary_statistics$POS))
+
+# Inspect row with missig POS value
+GWAS_summary_statistics %>% 
+  filter(is.na(POS))
+
+# Remove row with all NA values
+GWAS_summary_statistics <- GWAS_summary_statistics %>% 
+  filter(!is.na(POS))
+
+# Check
+GWAS_summary_statistics %>% 
+  dim()
+```
+
+```{r Check distribution of chromosome in GWAS summary stats}
+# Turn off scientific notation for plot
+options(scipen = 999)
+
+GWAS_summary_statistics %>% 
+  count(CHROM) %>% 
+  na.omit() %>% 
+  ggplot(aes(x = CHROM, y = n)) +
+  geom_bar(stat = "identity",
+           fill = "#EFC10B",
+           colour = "Black") +
+  labs(title = "No. of SNPs at each chromosome in GWAS summary statistics") +
+  theme_minimal() +
+  scale_x_continuous(breaks = seq(1, 22, by = 1)) +
+  theme(axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"))
+```
+
+```{r Create copy of schizophrenia GWAS summary stats for each chromosome}
+# Create vector of chromosome numbers to use in filter
+chr_numbers <- 1:22
+
+# Create list of df's for SNPs from each chromosome
+GWAS_summary_statistics_list <- chr_numbers %>% 
+  map( ~ GWAS_summary_statistics %>% 
+         filter(CHROM == .x))
+
+# Check dimensions match graph above
+GWAS_summary_statistics_list %>% 
+  map(dim)
+```
+
+```{r Name each df in the GWAS summary statistics list}
+# Create vector of names
+df_names <- paste0("GWAS_summary_stats_chr", 1:22)
+
+# Rename df's in the list
+names(GWAS_summary_statistics_list) <- df_names
+
+# Check
+GWAS_summary_statistics_list %>% 
+  names()
+```
+
+```{r Save individual tibbles to global environment}
+list2env(GWAS_summary_statistics_list, .GlobalEnv)
+```
+
+# Create intersection files for SNP2GENE
+
+```{r Create function to filter SNPs mapping to predicted genes}
+filter_SNPs <- function(chromosome, left_coordinate, right_coordinate){
+  
+  if(chromosome == 1){ # If predicted gene is located on the first chromosome
+    SNP_filter_list <- GWAS_summary_stats_chr1 %>% 
+      filter( # Filter SNPs within start/end transcript of predicted gene on chr1
+      dplyr::between(
+        POS, 
+        left = left_coordinate,
+        right = right_coordinate
+        )
+      )
+  } else if(chromosome == 2){
+    SNP_filter_list <- GWAS_summary_stats_chr2 %>% 
+      filter( # Filter SNPs within start/end transcript of predicted gene on chr2
+      dplyr::between(
+        POS, 
+        left = left_coordinate,
+        right = right_coordinate
+        )
+      )
+  } else if(chromosome == 3){
+    SNP_filter_list <- GWAS_summary_stats_chr3 %>% 
+      filter( # Filter SNPs within start/end transcript of predicted gene on chr3
+      dplyr::between(
+        POS, 
+        left = left_coordinate,
+        right = right_coordinate
+        )
+      )
+  } else if(chromosome == 4){
+    SNP_filter_list <- GWAS_summary_stats_chr4 %>% 
+      filter( # Filter SNPs within start/end transcript of predicted gene on chr4
+      dplyr::between(
+        POS, 
+        left = left_coordinate,
+        right = right_coordinate
+        )
+      )
+  } else if(chromosome == 5){
+    SNP_filter_list <- GWAS_summary_stats_chr5 %>% 
+      filter( # Filter SNPs within start/end transcript of predicted gene on chr5
+      dplyr::between(
+        POS, 
+        left = left_coordinate,
+        right = right_coordinate
+        )
+      )
+  } else if(chromosome == 6){
+    SNP_filter_list <- GWAS_summary_stats_chr6 %>% 
+      filter( # Filter SNPs within start/end transcript of predicted gene on chr6
+      dplyr::between(
+        POS, 
+        left = left_coordinate,
+        right = right_coordinate
+        )
+      )
+  } else if(chromosome == 7){
+    SNP_filter_list <- GWAS_summary_stats_chr7 %>% 
+      filter( # Filter SNPs within start/end transcript of predicted gene on chr7
+      dplyr::between(
+        POS, 
+        left = left_coordinate,
+        right = right_coordinate
+        )
+      )
+  } else if(chromosome == 8){
+    SNP_filter_list <- GWAS_summary_stats_chr8 %>% 
+      filter( # Filter SNPs within start/end transcript of predicted gene on chr8
+      dplyr::between(
+        POS, 
+        left = left_coordinate,
+        right = right_coordinate
+        )
+      )
+  } else if(chromosome == 9){
+    SNP_filter_list <- GWAS_summary_stats_chr9 %>% 
+      filter( # Filter SNPs within start/end transcript of predicted gene on chr9
+      dplyr::between(
+        POS, 
+        left = left_coordinate,
+        right = right_coordinate
+        )
+      )
+  } else if(chromosome == 10){
+    SNP_filter_list <- GWAS_summary_stats_chr10 %>% 
+      filter( # Filter SNPs within start/end transcript of predicted gene on chr10
+      dplyr::between(
+        POS, 
+        left = left_coordinate,
+        right = right_coordinate
+        )
+      )
+  } else if(chromosome == 11){
+    SNP_filter_list <- GWAS_summary_stats_chr11 %>% 
+      filter( # Filter SNPs within start/end transcript of predicted gene on chr11
+      dplyr::between(
+        POS, 
+        left = left_coordinate,
+        right = right_coordinate
+        )
+      )
+  } else if(chromosome == 12){
+    SNP_filter_list <- GWAS_summary_stats_chr12 %>% 
+      filter( # Filter SNPs within start/end transcript of predicted gene on chr12
+      dplyr::between(
+        POS, 
+        left = left_coordinate,
+        right = right_coordinate
+        )
+      )
+  } else if(chromosome == 13){
+    SNP_filter_list <- GWAS_summary_stats_chr13 %>% 
+      filter( # Filter SNPs within start/end transcript of predicted gene on chr13
+      dplyr::between(
+        POS, 
+        left = left_coordinate,
+        right = right_coordinate
+        )
+      )
+  } else if(chromosome == 14){
+    SNP_filter_list <- GWAS_summary_stats_chr14 %>% 
+      filter( # Filter SNPs within start/end transcript of predicted gene on chr14
+      dplyr::between(
+        POS, 
+        left = left_coordinate,
+        right = right_coordinate
+        )
+      )
+  } else if(chromosome == 15){
+    SNP_filter_list <- GWAS_summary_stats_chr15 %>% 
+      filter( # Filter SNPs within start/end transcript of predicted gene on chr15
+      dplyr::between(
+        POS, 
+        left = left_coordinate,
+        right = right_coordinate
+        )
+      )
+  } else if(chromosome == 16){
+    SNP_filter_list <- GWAS_summary_stats_chr16 %>% 
+      filter( # Filter SNPs within start/end transcript of predicted gene on chr16
+      dplyr::between(
+        POS, 
+        left = left_coordinate,
+        right = right_coordinate
+        )
+      )
+  } else if(chromosome == 17){
+    SNP_filter_list <- GWAS_summary_stats_chr17 %>% 
+      filter( # Filter SNPs within start/end transcript of predicted gene on chr17
+      dplyr::between(
+        POS, 
+        left = left_coordinate,
+        right = right_coordinate
+        )
+      )
+  } else if(chromosome == 18){
+    SNP_filter_list <- GWAS_summary_stats_chr18 %>% 
+      filter( # Filter SNPs within start/end transcript of predicted gene on chr18
+      dplyr::between(
+        POS, 
+        left = left_coordinate,
+        right = right_coordinate
+        )
+      )
+  } else if(chromosome == 19){
+    SNP_filter_list <- GWAS_summary_stats_chr19 %>% 
+      filter( # Filter SNPs within start/end transcript of predicted gene on chr19
+      dplyr::between(
+        POS, 
+        left = left_coordinate,
+        right = right_coordinate
+        )
+      )
+  } else if(chromosome == 20){
+    SNP_filter_list <- GWAS_summary_stats_chr20 %>% 
+      filter( # Filter SNPs within start/end transcript of predicted gene on chr20
+      dplyr::between(
+        POS, 
+        left = left_coordinate,
+        right = right_coordinate
+        )
+      )
+  } else if(chromosome == 21){
+    SNP_filter_list <- GWAS_summary_stats_chr21 %>% 
+      filter( # Filter SNPs within start/end transcript of predicted gene on chr21
+      dplyr::between(
+        POS, 
+        left = left_coordinate,
+        right = right_coordinate
+        )
+      )
+  } else if(chromosome == 22){
+    SNP_filter_list <- GWAS_summary_stats_chr22 %>% 
+      filter( # Filter SNPs within start/end transcript of predicted gene on chr22
+      dplyr::between(
+        POS, 
+        left = left_coordinate,
+        right = right_coordinate
+        )
+      )
+  }
+  
+  # Return list of df's with filtered SNPs
+  return(SNP_filter_list)
+}
+```
+
+```{r Perform intersection for GWAS predicted genes}
+# Create list of input for filter_SNPs function
+GWAS_input_list <- list(
+  chromosome = GWAS_predicted_genes$Chromosome,
+  left_coordinate = GWAS_predicted_genes$Left_coordinate_hg19,
+  right_coordinate = GWAS_predicted_genes$Right_coordinate_hg19
+)
+
+# Perform intersection
+GWAS_list_SNPs <- GWAS_input_list %>% 
+  pmap(filter_SNPs) %>% 
+  rbindlist(use.names = TRUE) %>% 
+  distinct(ID, .keep_all = TRUE)
+
+# Check new SNPs df
+GWAS_list_SNPs %>% 
+  dim() # 450,185 SNPs
+
+GWAS_list_SNPs %>% 
+  head()
+```
+
+```{r Perform intersection for DisGeNET predicted genes}
+# Create list of input for filter_SNPs function
+DisGeNET_input_list <- list(
+  chromosome = DisGeNET_predicted_genes$Chromosome,
+  left_coordinate = DisGeNET_predicted_genes$Left_coordinate_hg19,
+  right_coordinate = DisGeNET_predicted_genes$Right_coordinate_hg19
+)
+
+# Perform intersection
+DisGeNET_list_SNPs <- DisGeNET_input_list %>% 
+  pmap(filter_SNPs) %>% 
+  rbindlist(use.names = TRUE) %>%  # Bind df's by matching column names
+  distinct(ID, .keep_all = TRUE) # Get all distinct SNPs and keep all other columns
+
+# Check new SNPs df
+DisGeNET_list_SNPs %>% 
+  dim() # 311,820 SNPs
+
+DisGeNET_list_SNPs %>% 
+  head()
+```
+
+```{r Perform intersection for Clinvar predicted genes}
+# Create list of input for filter_SNPs function
+Clinvar_input_list <- list(
+  chromosome = Clinvar_predicted_genes$Chromosome,
+  left_coordinate = Clinvar_predicted_genes$Left_coordinate_hg19,
+  right_coordinate = Clinvar_predicted_genes$Right_coordinate_hg19
+)
+
+# Perform intersection
+Clinvar_list_SNPs <- Clinvar_input_list %>% 
+  pmap(filter_SNPs) %>% 
+  rbindlist(use.names = TRUE) %>%  # Bind df's by matching column names
+  distinct(ID, .keep_all = TRUE) # Get all distinct SNPs and keep all other columns
+
+# Check new SNPs df
+Clinvar_list_SNPs %>% 
+  dim() # 253,813 SNPs
+
+Clinvar_list_SNPs %>% 
+  head()
+```
+
+```{r Perform intersection for Union predicted genes}
+# Create list of input for filter_SNPs function
+Union_input_list <- list(
+  chromosome = Union_predicted_genes$Chromosome,
+  left_coordinate = Union_predicted_genes$Left_coordinate_hg19,
+  right_coordinate = Union_predicted_genes$Right_coordinate_hg19
+)
+
+# Perform intersection
+Union_list_SNPs <- Union_input_list %>% 
+  pmap(filter_SNPs) %>% 
+  rbindlist(use.names = TRUE) %>%  # Bind df's by matching column names
+  distinct(ID, .keep_all = TRUE) # Get all distinct SNPs and keep all other columns
+
+# Check new SNPs df
+Union_list_SNPs %>% 
+  dim() # 361,544 SNPs
+
+Union_list_SNPs %>% 
+  head()
+```
+
+```{r Perform intersection for common predicted genes across lists}
+# Create list of input for filter_SNPs function
+common_predicted_gene_input_list <- list(
+  chromosome = common_predicted_genes$Chromosome,
+  left_coordinate = common_predicted_genes$Left_coordinate_hg19,
+  right_coordinate = common_predicted_genes$Right_coordinate_hg19
+)
+
+# Perform intersection
+common_predicted_gene_SNPs <- common_predicted_gene_input_list %>% 
+  pmap(filter_SNPs) %>% 
+  rbindlist(use.names = TRUE) %>%  # Bind df's by matching column names
+  distinct(ID, .keep_all = TRUE) # Get all distinct SNPs and keep all other columns
+
+# Check new SNPs df
+common_predicted_gene_SNPs %>% 
+  dim() # 74,273 SNPs
+
+common_predicted_gene_SNPs %>% 
+  head()
+```
+
+## Save Intersection files
+
+```{r Save GWAS intersection file}
+write_csv(
+  GWAS_list_SNPs,
+  file = paste0(
+    analysis_folder_path,
+    "Filtered_GWAS_SNPs/GWAS_SNPs.csv"
+  )
+)
+```
+
+```{r Save DisGeNET intersection file}
+write_csv(
+  DisGeNET_list_SNPs,
+  file = paste0(
+    analysis_folder_path,
+    "Filtered_GWAS_SNPs/DisGeNET_SNPs.csv"
+  )
+)
+```
+
+```{r Save Clinvar intersection file}
+write_csv(
+  Clinvar_list_SNPs,
+  file = paste0(
+    analysis_folder_path,
+    "Filtered_GWAS_SNPs/Clinvar_SNPs.csv"
+  )
+)
+```
+
+```{r Save Union intersection file}
+write_csv(
+  Union_list_SNPs,
+  file = paste0(
+    analysis_folder_path,
+    "Filtered_GWAS_SNPs/Union_SNPs.csv"
+  )
+)
+```
+
+```{r Save common predicted genes intersection file}
+write_csv(
+  common_predicted_gene_SNPs,
+  file = paste0(
+    analysis_folder_path,
+    "Filtered_GWAS_SNPs/Common_predicted_gene_SNPs.csv"
+  )
+)
+```

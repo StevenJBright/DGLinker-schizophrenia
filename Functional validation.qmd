@@ -1,0 +1,336 @@
+---
+title: "Functional validation"
+author: "Steven Bright"
+format: html
+editor: visual
+---
+
+# Set-up
+
+```{r Clean global environment}
+remove(list = ls())
+```
+
+```{r Load packages}
+library(openxlsx)
+library(janitor)
+library(tidyverse)
+```
+
+```{r Source credentials file}
+source("../credentials.r")
+```
+
+# Create background gene list file for common predicted genes
+
+All the other lists (GWAS, DisGeNET, Clinvar, Union) had an input gene list for DGLinker, which, in addition to a list of predicted genes, returned a list of genes predicted to be not associated with schizophrenia. The common predicted genes across all the lists, however, did not have an input list for DGLinker and therefore does not have an associated list of genes that were predicted as being not associated with schizophrenia - which PANTHERDB requires to perform the functional enrichment analysis.
+
+Therefore, a background list of genes not predicted to be associated with schizophrenia will be created for the common predicted genes by finding the genes that were consistently predicted to be not associated with schizophrenia across all the lists. This will enable the biological processes of the common predicted genes to be functionally analysed.
+
+```{r Create path to predicted non-associated schizophrenia genes for each list}
+non_associated_genes_path <- paste0(
+  analysis_folder_path,
+  "Not_associated_genes_summary_raw.csv"
+)
+```
+
+```{r Read in predicted non-associated genes}
+DGLinker_non_associated_genes <- read_csv(
+  file = non_associated_genes_path
+)
+
+# Check
+DGLinker_non_associated_genes %>% 
+  dim()
+
+DGLinker_non_associated_genes %>% 
+  head()
+```
+
+```{r Create list of predicted non-associated schizophrenia genes with NAs removed}
+# For each column, remove NA's and save in list format
+DGLinker_non_associated_genes <- DGLinker_non_associated_genes %>% 
+  map(~ na.omit(.x))
+
+# Rename list headers
+gene_list_names <- c(
+  "GWAS",
+  "DisGeNET",
+  "Clinvar",
+  "Union"
+)
+
+names(DGLinker_non_associated_genes) <- gene_list_names
+
+# Check list
+DGLinker_non_associated_genes %>% 
+  str()
+```
+
+```{r Create df with the common non-associated genes predicted across every list}
+# Find the intersection of the four gene lists
+common_non_associated_genes <- Reduce(intersect, DGLinker_non_associated_genes) %>% 
+  as_tibble()
+
+# Check
+common_non_associated_genes %>% 
+  dim()
+
+common_non_associated_genes %>% 
+  head()
+```
+
+```{r Rename column in common non-associated genes}
+common_non_associated_genes <- common_non_associated_genes %>% 
+  rename("gene" = "value")
+
+# Check
+common_non_associated_genes %>% 
+  head()
+```
+
+```{r Save common non-associated predicted genes}
+common_non_associated_genes %>% 
+  write_csv(
+    paste0(
+      analysis_folder_path,
+      "DGlinker results/Background_gene_list_common.csv"
+    )
+  )
+```
+
+# Analyses
+
+```{r Create paths to PANTHERDB validation results for each list}
+GWAS_pantherdb_path <- paste0(
+  analysis_folder_path,
+  "DGlinker results/GWAS_gene_results/model_results/Pantherdb_validation_GWAS.csv"
+)
+
+DisGeNET_pantherdb_path <- paste0(
+  analysis_folder_path,
+  "DGlinker results/DisGeNET_gene_results/model_results/Pantherdb_validation_DisGeNET.csv"
+)
+
+Clinvar_pantherdb_path <- paste0(
+  analysis_folder_path,
+  "DGlinker results/Clinvar_gene_results/model_results/Pantherdb_validation_Clinvar.csv"
+)
+
+Union_pantherdb_path <- paste0(
+  analysis_folder_path,
+  "DGlinker results/Union_gene_results/model_results/Pantherdb_validation_Union.csv"
+)
+
+Common_pantherdb_path <- paste0(
+  analysis_folder_path,
+  "DGlinker results/Pantherdb_validation_common.csv"
+)
+```
+
+```{r Save path names to pantherdb validation files into a vector}
+pantherdb_file_paths <- c(
+  GWAS_pantherdb = GWAS_pantherdb_path,
+  DisGeNET_pantherdb = DisGeNET_pantherdb_path,
+  Clinvar_pantherdb = Clinvar_pantherdb_path,
+  Union_pantherdb = Union_pantherdb_path,
+  Common_pantherdb = Common_pantherdb_path
+)
+```
+
+```{r Read in pantherdb validation files}
+pantherdb_files <- pantherdb_file_paths %>% 
+  map(~ read_csv(.x,
+                 skip = 7) # Each file's headers starts on line 8
+      )
+
+# Check list
+pantherdb_files %>% 
+  str()
+```
+
+```{r Put GO term column first in every validation file}
+pantherdb_files <- pantherdb_files %>% 
+  map(~ .x %>% 
+        relocate(GO_term)
+      )
+
+# Check GO_term appears first
+pantherdb_files %>% 
+  map(colnames)
+```
+
+## Revigo flies
+
+```{r Create paths to revigo files for each list}
+GWAS_revigo_path <- paste0(
+  analysis_folder_path,
+  "DGlinker results/GWAS_gene_results/model_results/Revigo_results_GWAS_collapsed.csv"
+)
+
+DisGeNET_revigo_path <- paste0(
+  analysis_folder_path,
+  "DGlinker results/DisGeNET_gene_results/model_results/Revigo_results_DisGeNET_collapsed.csv"
+)
+
+Clinvar_revigo_path <- paste0(
+  analysis_folder_path,
+  "DGlinker results/Clinvar_gene_results/model_results/Revigo_results_Clinvar_collapsed.csv"
+)
+
+Union_revigo_path <- paste0(
+  analysis_folder_path,
+  "DGlinker results/Union_gene_results/model_results/Revigo_results_Union_collapsed.csv"
+)
+
+Common_revigo_path <- paste0(
+  analysis_folder_path,
+  "DGlinker results/Revigo_results_common_collapsed.csv"
+)
+```
+
+```{r Save path names to revigo files into a vector}
+revigo_file_paths <- c(
+  GWAS_pantherdb = GWAS_revigo_path,
+  DisGeNET_pantherdb = DisGeNET_revigo_path,
+  Clinvar_pantherdb = Clinvar_revigo_path,
+  Union_pantherdb = Union_revigo_path,
+  Common_pantherdb = Common_revigo_path
+)
+```
+
+```{r Read in revigo files}
+revigo_files <- revigo_file_paths %>% 
+  map(~ read_csv(.x))
+
+# Check
+revigo_files %>% 
+  str()
+```
+
+```{r Select the desired columns from each revigo file}
+revigo_files <- revigo_files %>% 
+  map(~ .x %>% 
+        select(
+          GO_term = TermID,
+          Revigo_name = Name,
+          Uniqueness,
+          Dispensability
+        )
+      )
+
+# Check selection worked
+revigo_files %>% 
+  map(colnames)
+```
+
+```{r Join pantherdb and revigo results}
+functional_enrichment_files <- pantherdb_files %>% 
+  map2(revigo_files,
+       ~ .x %>% 
+         left_join(.y,
+                   by = "GO_term")
+       )
+
+# Check
+functional_enrichment_files %>% 
+  map(head)
+```
+
+```{r Create eliminated column to show GO terms that remained after revigo}
+functional_enrichment_files <- functional_enrichment_files %>% 
+  map(~ .x %>% 
+        mutate(Eliminated = 
+                 case_when(
+                   is.na(Revigo_name) ~ 1,
+                   !is.na(Revigo_name) ~ 0
+                 )
+               )
+      )
+
+# Check results
+functional_enrichment_files %>% 
+  map(~ .x %>% 
+        count(Eliminated))
+```
+
+```{r Reformat column names}
+# Remove dash
+functional_enrichment_files <- functional_enrichment_files %>% 
+  map(~ .x %>% 
+        clean_names())
+
+# Check
+functional_enrichment_files %>% 
+  map(colnames)
+```
+
+**Note:** The enrichment fold column in the Clinvar df is of type character because one of the entries has '\> 100'. It's done this because the value is calculated by: biological function observed in list / expected freq in list. For this observation, this was: 20 / 0.14 = 142.9 (hence \> 100).
+
+I will replace this value with the right one then convert the column to numeric.
+
+```{r Edit problematic enrichment fold entry}
+functional_enrichment_files <- functional_enrichment_files %>% 
+  map(~ mutate(.x, 
+                client_text_box_input_fold_enrichment = 
+                 str_replace_all(
+                   client_text_box_input_fold_enrichment, 
+                   "> 100", 
+                   "142.9")
+               )
+      )
+
+functional_enrichment_files %>% 
+  map(head)
+```
+
+```{r Convert fold enrichment column in every dataset to numeric}
+functional_enrichment_files <- functional_enrichment_files %>% 
+  map(~ .x %>% 
+        mutate(client_text_box_input_fold_enrichment = 
+                 as.numeric(client_text_box_input_fold_enrichment)
+               )
+      )
+
+# Check
+functional_enrichment_files %>% 
+  map(head)
+```
+
+```{r Sort the df rows by fold enrichment column in descending order}
+functional_enrichment_files <- functional_enrichment_files %>% 
+  map(~ .x %>% 
+        arrange(eliminated,
+               desc(client_text_box_input_fold_enrichment)
+               )
+      )
+
+# Check
+functional_enrichment_files
+```
+
+```{r Rename individual functional enrichment files}
+functional_enrichment_names <- c(
+  "GWAS_functional_enrichment",
+  "DisGeNET_functional_enrichment",
+  "Clinvar_functional_enrichment",
+  "Union_functional_enrichment",
+  "Common_functional_enrichment"
+)
+
+names(functional_enrichment_files) <- functional_enrichment_names
+
+# Check
+functional_enrichment_files %>% 
+  names()
+```
+
+```{r Save all enrichment files into a single excel file}
+write.xlsx(
+  functional_enrichment_files,
+  file = paste0(
+    analysis_folder_path,
+    "Validation analyses/Functional_enrichment_results.xlsx"
+  )
+)
+```

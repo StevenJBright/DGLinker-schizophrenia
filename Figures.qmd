@@ -1,0 +1,434 @@
+---
+title: "Figures"
+author: "Steven Bright"
+format: html
+editor: visual
+---
+
+# Set-up
+
+```{r Clean global environment}
+remove(list=ls())
+```
+
+```{r Install ggVennDiagram package}
+#ggVennDiagram - making venn diagrams in R
+#devtools::install_github("gaospecial/ggVennDiagram")
+
+# sf - To support the venn diagram plotting
+#install.packages("sf")
+```
+
+```{r Load Packages}
+library(ggVennDiagram)
+library(sf)
+library(tidyverse)
+```
+
+```{r Source credentials file}
+source("../credentials.r")
+```
+
+# Create input schizophrenia venn diagram
+
+## Pre-processing
+
+```{r Create paths to files specifying the input genes to DGLinker for each list}
+GWAS_input_genes_path <- paste0(
+  analysis_folder_path, 
+  "DGlinker results/GWAS_gene_results/model_results/GWAS_DGLinker_input_genes.csv"
+  )
+
+DisGeNET_input_genes_path <- paste0(
+  analysis_folder_path,
+  "DGlinker results/DisGeNET_gene_results/model_results/DisGeNET_DGLinker_input_genes.csv"
+)
+
+Clinvar_input_genes_path <- paste0(
+  analysis_folder_path,
+  "DGlinker results/Clinvar_gene_results/model_results/Clinvar_DGLinker_input_genes.csv"
+)
+
+Union_input_genes_path <- paste0(
+  analysis_folder_path,
+  "DGlinker results/Union_gene_results/model_results/Union_DGLinker_input_genes.csv"
+)
+```
+
+```{r Create named vector with file path to input DGLinker genes}
+input_DGLinker_gene_paths <- c(
+  GWAS = GWAS_input_genes_path,
+  DisGeNET = DisGeNET_input_genes_path,
+  Clinvar = Clinvar_input_genes_path,
+  Union = Union_input_genes_path
+)
+```
+
+```{r Read in DGLinker input genes}
+DGLinker_input_genes <- input_DGLinker_gene_paths %>% 
+  map(read_csv)
+
+# Check
+DGLinker_input_genes %>% 
+  map(head)
+```
+
+```{r Put one gene per cell}
+DGLinker_input_genes <- DGLinker_input_genes %>% 
+  map(~ .x %>% 
+        separate_rows(DGLinker_input_genes,
+                      sep = ", ")
+      )
+
+# Check
+DGLinker_input_genes %>% 
+  map(head)
+```
+
+```{r Covert the dataframes into vectors}
+DGLinker_input_genes <- DGLinker_input_genes %>% 
+  map(~ .x %>% 
+        pull(DGLinker_input_genes))
+
+# Check
+DGLinker_input_genes %>% 
+  map(head)
+```
+
+```{r Count no. of input genes per list}
+DGLinker_input_genes %>% 
+  map(length)
+```
+
+## Venn diagram plot
+
+```{r Create venn diagram for input schizophrenia genes}
+input_gene_venn <- Venn(DGLinker_input_genes[-4])
+d <- process_data(input_gene_venn)
+
+d2 <- process_data(input_gene_venn)
+d2@region <- st_polygonize(d@setEdge)
+
+# Create vector with colours for lists in plot
+colours <- c(
+  GWAS = 'blue', 
+  DisGeNET = 'red',
+  Clinvar = 'green',
+  Union = 'orange'
+)
+
+# Create venn diagram
+ggplot() +
+  geom_sf(aes(fill = name), data = venn_region(d2)) +
+  geom_sf(aes(color = name), data = venn_setedge(d)) +
+  geom_sf_text(aes(label = name), size = 3.2, data = venn_setlabel(d)) +
+  geom_sf_text(aes(label = count), data = venn_region(d)) +
+  scale_color_manual(values = alpha(colours[-4], .2)) +
+  scale_fill_manual(values = alpha(colours[-4], .2)) +
+  theme_void() +
+  theme(legend.title = element_blank(),
+        legend.position="top",
+        legend.justification = "center")
+```
+
+## Predicted schizophrenia genes diagram
+
+```{r Read in predicted genes from each gene list definition}
+predicted_schizophrenia_genes <- read_csv(
+  paste0(
+    analysis_folder_path,
+    "Predicted_genes_summary_raw.csv"
+  )
+)
+
+# Check
+predicted_schizophrenia_genes %>% 
+  dim()
+
+predicted_schizophrenia_genes %>% 
+  head()
+```
+
+```{r Create list of predicted schizophrenia genes with NAs removed}
+# For each column, remove NA's and save in list format
+predicted_schizophrenia_gene_list <- predicted_schizophrenia_genes %>% 
+  map(~ na.omit(.x))
+
+# Rename list headers
+gene_list_names <- c(
+  "GWAS",
+  "DisGeNET",
+  "Clinvar",
+  "Union"
+)
+
+names(predicted_schizophrenia_gene_list) <- gene_list_names
+
+# Check list
+predicted_schizophrenia_gene_list %>% 
+  str()
+```
+
+```{r Check that there's no missingness in the predicted gene vectors}
+predicted_schizophrenia_gene_list %>% 
+  map(~sum(is.na(.x)))
+```
+
+```{r Check how many genes were predicted by each definition list}
+predicted_schizophrenia_gene_list %>% 
+  map(length)
+```
+
+```{r Create venn diagram for predicted schizophrenia genes}
+predicted_gene_venn <- Venn(predicted_schizophrenia_gene_list)
+d_predicted <- process_data(predicted_gene_venn)
+
+d2_predicted <- process_data(predicted_gene_venn)
+d2_predicted@region <- st_polygonize(d_predicted@setEdge)
+
+# Create venn diagram
+ggplot() +
+  geom_sf(aes(fill = name), data = venn_region(d2_predicted)) +
+  geom_sf(aes(color = name), data = venn_setedge(d_predicted)) +
+  geom_sf_text(aes(label = name), size = 3.2, data = venn_setlabel(d_predicted)) +
+  geom_sf_text(aes(label = count), data = venn_region(d_predicted)) +
+  scale_color_manual(values = alpha(colours, .2)) +
+  scale_fill_manual(values = alpha(colours, .2)) +
+  theme_void() +
+  theme(legend.title = element_blank())
+```
+
+## Predicted and input gene overlap graph
+
+Finally, a stacked bar graph will be created to show the overlap between the genes that were predicted after each list submission to DGLinker and the input genes in the other lists.
+
+For each of these predictions, I need to break them down into:
+
+-   The predicted genes that appear in the input of at least one other list
+-   The predicted genes that do not appear in the input of at least one other list
+
+```{r Check how many of the GWAS gene predictions were present in each input list}
+GWAS_in_DisGeNET <- predicted_schizophrenia_gene_list$GWAS %in% DGLinker_input_genes$DisGeNET
+GWAS_in_Clinvar <- predicted_schizophrenia_gene_list$GWAS %in% DGLinker_input_genes$Clinvar
+GWAS_in_Union <- predicted_schizophrenia_gene_list$GWAS %in% DGLinker_input_genes$Union
+
+# Check summaries
+GWAS_in_DisGeNET %>% 
+  summary()
+
+GWAS_in_Clinvar %>% 
+  summary()
+
+GWAS_in_Union %>% 
+  summary()
+```
+
+```{r Check total of GWAS predicted genes in all other input lists}
+# Collapse the boolean vectors into one, same length vector where if any are TRUE, then TRUE, else FALSE
+GWAS_pred_input_overlap <- Reduce(
+  "|", 
+  list(
+    GWAS_in_DisGeNET,
+    GWAS_in_Clinvar,
+    GWAS_in_Union
+    )
+  ) %>% 
+  summary()
+
+# Check
+GWAS_pred_input_overlap
+```
+
+```{r Check how many of the DisGeNET gene predictions were present in each input list}
+DisGeNET_in_GWAS <- predicted_schizophrenia_gene_list$DisGeNET %in% DGLinker_input_genes$GWAS
+DisGeNET_in_Clinvar <- predicted_schizophrenia_gene_list$DisGeNET %in% DGLinker_input_genes$Clinvar
+DisGeNET_in_Union <- predicted_schizophrenia_gene_list$DisGeNET %in% DGLinker_input_genes$Union
+
+# Check summaries
+DisGeNET_in_GWAS %>% 
+  summary()
+
+DisGeNET_in_Clinvar %>% 
+  summary()
+
+DisGeNET_in_Union %>% 
+  summary()
+```
+
+```{r Check total of DisGeNET predicted genes in all other input lists}
+# Collapse the boolean vectors into one, same length vector where if any are TRUE, then TRUE, else FALSE
+DisGeNET_pred_input_overlap <- Reduce(
+  "|", 
+  list(
+    DisGeNET_in_GWAS,
+    DisGeNET_in_Clinvar,
+    DisGeNET_in_Union
+    )
+  ) %>% 
+  summary()
+
+# Check
+DisGeNET_pred_input_overlap
+```
+
+```{r Check how many of the Clinvar gene predictions were present in each input list}
+Clinvar_in_GWAS <- predicted_schizophrenia_gene_list$Clinvar %in% DGLinker_input_genes$GWAS
+Clinvar_in_DisGeNET <- predicted_schizophrenia_gene_list$Clinvar %in% DGLinker_input_genes$DisGeNET
+Clinvar_in_Union <- predicted_schizophrenia_gene_list$Clinvar %in% DGLinker_input_genes$Union
+
+# Check summaries
+Clinvar_in_GWAS %>% 
+  summary()
+
+Clinvar_in_DisGeNET %>% 
+  summary()
+
+Clinvar_in_Union %>% 
+  summary()
+```
+
+```{r Check total of Clinvar predicted genes in other input lists}
+# Collapse the boolean vectors into one, same length vector where if any are TRUE, then TRUE, else FALSE
+Clinvar_pred_input_overlap <- Reduce(
+  "|", 
+  list(
+    Clinvar_in_GWAS,
+    Clinvar_in_DisGeNET,
+    Clinvar_in_Union
+    )
+  ) %>% 
+  summary()
+
+# Check
+Clinvar_pred_input_overlap
+```
+
+```{r Check how many of the Union gene predictions were present in each input list}
+Union_in_GWAS <- predicted_schizophrenia_gene_list$Union %in% DGLinker_input_genes$GWAS
+Union_in_DisGeNET <- predicted_schizophrenia_gene_list$Union %in% DGLinker_input_genes$DisGeNET
+Union_in_Clinvar <- predicted_schizophrenia_gene_list$Union %in% DGLinker_input_genes$Clinvar
+
+# Collapse the boolean vectors into one, same length vector where if any are TRUE, then TRUE, else FALSE
+Union_pred_input_overlap <- Reduce(
+  "|", 
+  list(
+    Union_in_GWAS,
+    Union_in_DisGeNET,
+    Union_in_Clinvar
+    )
+  ) %>% 
+  summary()
+
+# Check
+Union_pred_input_overlap
+```
+
+```{r Create tibble with results}
+predicted_input_gene_overlap <- tibble(
+  gene_list = c(
+    "GWAS",
+    "DisGeNET",
+    "Clinvar",
+    "Union"
+  ),
+  non_overlapping_predictions = c(
+    GWAS_pred_input_overlap[2],
+    DisGeNET_pred_input_overlap[2],
+    Clinvar_pred_input_overlap[2],
+    Union_pred_input_overlap[2]
+  ),
+  overlapping_predictions = c(
+    GWAS_pred_input_overlap[3],
+    DisGeNET_pred_input_overlap[3],
+    Clinvar_pred_input_overlap[3],
+    0 # Union predictions overlapping with input is 0 by default
+  )
+)
+
+# Check
+predicted_input_gene_overlap %>% 
+  head()
+```
+
+```{r Reshape the predicted and input df to long format}
+predicted_input_gene_overlap <- predicted_input_gene_overlap %>% 
+  pivot_longer(
+    cols = !gene_list,
+    names_to = "overlapping_status",
+    values_to = "count"
+    )
+
+# Check
+predicted_input_gene_overlap
+```
+
+```{r Convert variables to appropriate class}
+# Put variables to be converted to factors into a vector
+factor_vars <- c(
+  "gene_list",
+  "overlapping_status"
+)
+
+# Convert variables to factor
+predicted_input_gene_overlap[factor_vars] <- predicted_input_gene_overlap[factor_vars] %>% 
+  map(as.factor)
+
+# Change the count variable to be numeric
+predicted_input_gene_overlap <- predicted_input_gene_overlap %>% 
+  mutate(count = 
+           as.numeric(count))
+
+# Check
+predicted_input_gene_overlap
+```
+
+```{r Change order of factor levels}
+# Update factor levels
+predicted_input_gene_overlap <- predicted_input_gene_overlap %>% 
+  mutate(gene_list = 
+           factor(gene_list, 
+                  levels = c("GWAS", "DisGeNET", "Clinvar", "Union")
+                  )
+         )
+
+predicted_input_gene_overlap <- predicted_input_gene_overlap %>% 
+  mutate(overlapping_status = 
+           factor(overlapping_status, 
+                  levels = c("overlapping_predictions", "non_overlapping_predictions")
+                  )
+         )
+
+# Check
+predicted_input_gene_overlap %>% 
+  map(levels)
+```
+
+```{r Calculate percentage of overlapping and non-overlapping genes}
+predicted_input_gene_overlap <- predicted_input_gene_overlap %>% 
+  group_by(gene_list) %>% 
+  mutate(percent = 
+           round(count/sum(count) * 100, 2))
+
+# Check
+predicted_input_gene_overlap
+```
+
+```{r Plot the overlap between the predicted genes and input genes}
+predicted_input_gene_overlap %>% 
+  ggplot(aes(x = gene_list, y = count, fill = overlapping_status)) +
+  geom_bar(
+    stat = "identity", 
+    position = "stack",
+    colour = "black"
+    ) +
+  geom_text(aes(label = ifelse(percent > 5, paste0(percent, "%"), "")), 
+            position = position_stack(vjust = 0.5), size = 4) +
+  labs(y = "Predicted gene count",
+       x = "Gene list") +
+  theme_minimal() +
+  scale_fill_discrete(name = "Overlapping status",
+                      labels = c("Predicted genes in other input list",
+                                 "Predicted genes not in other input list")) +
+  theme(axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"))
+```

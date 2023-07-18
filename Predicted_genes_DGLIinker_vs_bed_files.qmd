@@ -1,0 +1,225 @@
+---
+title: "Predicted genes - DGLinker vs bed files"
+author: "Steven Bright"
+format: html
+editor: visual
+---
+
+# Set-up
+
+```{r Clean global environment}
+remove(list = ls())
+```
+
+```{r Load packages}
+library(tidyverse)
+```
+
+```{r Source credentials file}
+source("../credentials.r")
+```
+
+# Read in files
+
+## DGLinker's predicted genes BED files
+
+```{r Create paths to BED files for predicted schizophrenia genes for each list}
+GWAS_predicted_genes_BED_path <- paste0(
+  analysis_folder_path,
+  "DGlinker results/GWAS_gene_results/results_genomic_regions/predicted_genes_hg19.bed"
+)
+
+DisGeNET_predicted_genes_BED_path <- paste0(
+  analysis_folder_path,
+  "DGlinker results/DisGeNET_gene_results/results_genomic_regions/predicted_genes_hg19.bed"
+)
+
+Clinvar_predicted_genes_BED_path <- paste0(
+  analysis_folder_path,
+  "DGlinker results/Clinvar_gene_results/results_genomic_regions/predicted_genes_hg19.bed"
+)
+
+Union_predicted_genes_BED_path <- paste0(
+  analysis_folder_path,
+  "DGlinker results/Union_gene_results/results_genomic_regions/predicted_genes_hg19.bed"
+)
+```
+
+```{r Save path names to predicted gene coordinate files into a vector}
+predicted_gene_BED_file_paths <- c(
+  GWAS_predicted_genes_BED = GWAS_predicted_genes_BED_path,
+  DisGeNET_predicted_genes_BED = DisGeNET_predicted_genes_BED_path,
+  Clinvar_predicted_genes_BED = Clinvar_predicted_genes_BED_path,
+  Union_predicted_genes_BED = Union_predicted_genes_BED_path
+)
+```
+
+```{r Read in predicted gene files}
+predicted_gene_BED_files <- predicted_gene_BED_file_paths %>% 
+  map(~ read.table(.x))
+
+# Check list
+predicted_gene_BED_files %>% 
+  str()
+```
+
+```{r Rename the columns of all the lists}
+predicted_gene_BED_files <- predicted_gene_BED_files %>% 
+  map(
+    ~ .x %>% 
+        rename(
+          "Chromosome" = V1,
+          "Left_coordinate_hg19" = V2,
+          "Right_coordinate_hg19" = V3,
+          "Predicted_gene" = V4
+               )
+      )
+
+# Check result
+predicted_gene_BED_files %>% 
+  map(colnames)
+```
+
+## Predicted genes from DGLinker
+
+```{r Read in DGLinker predicted genes from each gene list}
+DGLinker_predicted_genes <- read_csv(
+  paste0(
+    analysis_folder_path,
+    "Predicted_genes_summary_raw.csv"
+  )
+)
+
+# Check
+DGLinker_predicted_genes %>% 
+  dim()
+
+DGLinker_predicted_genes %>% 
+  head()
+```
+
+```{r Create list of predicted schizophrenia genes with NAs removed}
+# For each column, remove NA's and save in list format
+DGLinker_predicted_genes <- DGLinker_predicted_genes %>% 
+  map(~ na.omit(.x))
+
+# Rename list headers
+gene_list_names <- c(
+  "GWAS",
+  "DisGeNET",
+  "Clinvar",
+  "Union"
+)
+
+names(DGLinker_predicted_genes) <- gene_list_names
+
+# Check list
+DGLinker_predicted_genes %>% 
+  str()
+```
+
+# Check overlap between DGLinker predicted genes and genes in BED files
+
+After submitting a gene list to DGLinker, the webserver provides BED files for the newly predicted genes to give information about their gene transcripts and on which chromosome they belong to. The newly predicted genes are also listed in another file by DGLinker.
+
+This exploratory analysis will assess to what extent these two files overlap to ensure that the additional BED files provided by DGLinker are, in fact, providing information about the newly predicted genes by DGLinker.
+
+```{r Create not in function}
+'%not_in%' <- Negate('%in%')
+```
+
+```{r Inspect length of DGLinker predicted genes}
+DGLinker_predicted_genes %>% 
+  map(length)
+```
+
+```{r Inspect length of BED files}
+predicted_gene_BED_files %>% 
+  map(nrow)
+```
+
+## DGLinker genes not in BED files
+
+```{r Inspect no. of DGLinker predicted genes not in BED files}
+DGLinker_genes_notin_BED_count <- DGLinker_predicted_genes %>% 
+  map2(predicted_gene_BED_files,
+       function(x, y){
+         
+         # Extract genes from the BED files
+         BED_file_genes <- y %>% 
+           pull(Predicted_gene)
+         
+         # Compare the overlap between the predicted genes and the genes in BED file
+         x %not_in% BED_file_genes
+         
+       })
+
+# Summarise overlap
+DGLinker_genes_notin_BED_count %>% 
+  map(~ summary(.x))
+```
+
+```{r Find the non-matching genes in each list}
+DGLinker_genes_notin_BED <- DGLinker_predicted_genes %>% 
+  map2(DGLinker_genes_notin_BED_count,
+       function(x, y){
+         x[y]
+       })
+
+# Check
+DGLinker_genes_notin_BED
+```
+
+```{r Check that number of filtered genes matches the N non-matching genes}
+DGLinker_genes_notin_BED_count %>% 
+  map(~ summary(.x))
+
+DGLinker_genes_notin_BED %>% 
+  map(length)
+```
+
+## BED file genes not in DGLinker
+
+```{r Find BED file genes not in DGLinker predicted genes}
+BED_genes_notin_DGLinker_count <- DGLinker_predicted_genes %>% 
+  map2(predicted_gene_BED_files,
+       function(x, y){
+         
+         # Extract genes from the BED files
+         BED_file_genes <- y %>% 
+           pull(Predicted_gene)
+         
+         # Compare the overlap between the predicted genes and the genes in BED file
+         BED_file_genes %not_in% x
+         
+       })
+
+# Summarise overlap
+BED_genes_notin_DGLinker_count %>% 
+  map(~ summary(.x))
+```
+
+```{r Find the non-matching genes in each list}
+BED_genes_notin_DGLinker <- predicted_gene_BED_files %>% 
+  map2(BED_genes_notin_DGLinker_count,
+       function(x, y){
+         
+         # Extract predicted gene column into vector from BED files
+         BED_file_genes <- x %>% 
+           pull(Predicted_gene)
+         
+         # Filter non-matching genes
+         BED_file_genes[y]
+       })
+
+# Check
+BED_genes_notin_DGLinker
+```
+
+```{r Check that number of filtered genes matches the N non-matching genes}
+BED_genes_notin_DGLinker_count %>% 
+  map(~ summary(.x))
+
+BED_genes_notin_DGLinker %>% 
+  map(length)
+```

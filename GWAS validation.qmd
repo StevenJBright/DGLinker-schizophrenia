@@ -1,0 +1,1146 @@
+---
+title: "GWAS validation"
+author: "Steven Bright"
+format: html
+editor: visual
+---
+
+# Set-up
+
+```{r Clean global environment}
+remove(list = ls())
+```
+
+```{r Load packages}
+library(ggVennDiagram)
+library(sf)
+library(openxlsx)
+library(tidyverse)
+```
+
+```{r Source in credentials file}
+source("../credentials.r")
+```
+
+# Read in files
+
+```{r Create paths to MAGMA gene-based p-value files for each list}
+GWAS_magma_pvals_path <- paste0(
+  analysis_folder_path,
+  "FUMA results/GWAS_intersection/Useful_files/GWAS_gene_pvals.csv"
+)
+
+DisGeNET_magma_pvals_path <- paste0(
+  analysis_folder_path,
+  "FUMA results/DisGeNET_intersection/Useful_files/DisGeNET_gene_pvals.csv"
+)
+
+Clinvar_magma_pvals_path <- paste0(
+  analysis_folder_path,
+  "FUMA results/Clinvar_intersection/Useful_files/Clinvar_gene_pvals.csv"
+)
+
+Union_magma_pvals_path <- paste0(
+  analysis_folder_path,
+  "FUMA results/Union_intersection/Useful_files/Union_gene_pvals.csv"
+)
+
+Common_genes_magma_pvals_path <- paste0(
+  analysis_folder_path,
+  "FUMA results/Common_genes_intersection/Useful_files/common_predicted_gene_pvals.csv"
+)
+```
+
+```{r Create vector with paths to MAGMA gene pvals files}
+magma_gene_pval_file_paths <- c(
+  GWAS_magma_pvals = GWAS_magma_pvals_path,
+  DisGeNET_magma_pvals = DisGeNET_magma_pvals_path,
+  Clinvar_magma_pvals = Clinvar_magma_pvals_path,
+  Union_magma_pvals = Union_magma_pvals_path,
+  Common_genes_magma_pvals = Common_genes_magma_pvals_path
+)
+```
+
+```{r Read in MAGMA pval files}
+magma_gene_pval_files <- magma_gene_pval_file_paths %>% 
+  map(~ read_csv(.x))
+
+# Check list
+magma_gene_pval_files %>% 
+  map(head)
+```
+
+```{r Read in predicted genes for each list}
+predicted_schizophrenia_genes <- read_csv(
+  file = paste0(
+    analysis_folder_path,
+    "Predicted_genes_summary_raw.csv"
+  )
+)
+
+# Check
+predicted_schizophrenia_genes %>% 
+  head()
+```
+
+```{r Create list of predicted schziophrenia genes with the NAs removed}
+# For each column, remove NA's and save in list format
+predicted_schizophrenia_gene_list <- predicted_schizophrenia_genes %>% 
+  map(~ na.omit(.x))
+
+# Rename list headers
+gene_list_names <- c(
+  "GWAS_predicted_genes",
+  "DisGeNET_predicted_genes",
+  "Clinvar_predicted_genes",
+  "Union_predicted_genes"
+)
+
+names(predicted_schizophrenia_gene_list) <- gene_list_names
+
+# Check list
+predicted_schizophrenia_gene_list %>% 
+  str()
+```
+
+```{r Find the common predicted genes across the 4 lists}
+# Find the intersection of the four gene lists
+common_predicted_genes <- Reduce(
+  intersect,
+  predicted_schizophrenia_gene_list
+  ) %>% 
+  as_tibble()
+
+# Check
+common_predicted_genes %>% 
+  dim()
+
+common_predicted_genes %>% 
+  head()
+```
+
+```{r Append common predicted genes to predicted gene list}
+predicted_schizophrenia_gene_list[["Common_predicted_genes"]] <- common_predicted_genes$value
+
+# Check
+predicted_schizophrenia_gene_list %>% 
+  str()
+```
+
+# Find N mapped genes
+
+```{r Inspect how many genes are in each of the MAGMA files}
+magma_gene_pval_files %>% 
+  map(nrow)
+```
+
+```{r Remove the duplicated genes from the lists}
+magma_gene_pval_files <- magma_gene_pval_files %>% 
+  map(~ .x %>% 
+        distinct(SYMBOL, .keep_all = TRUE))
+
+# Check length
+magma_gene_pval_files %>% 
+  map(nrow)
+```
+
+```{r Find the n mapped genes in each magma pval file}
+magma_gene_pval_files_mapped <- magma_gene_pval_files %>% 
+  map2(predicted_schizophrenia_gene_list,
+       function(x, y){
+         
+         # Get genes in MAGMA files
+         magma_genes <- x %>% 
+           pull(SYMBOL)
+         
+         # Filter MAGMA file to only contain genes predicted by DGLinker
+         x[magma_genes %in% y, ]
+         
+       })
+
+# Check number of genes mapped in each list
+magma_gene_pval_files_mapped %>% 
+  map(nrow)
+```
+
+```{r Read in training genes for each list}
+training_genes <- read_csv(
+  file = paste0(
+    analysis_folder_path,
+    "Gene lists/Union/Union_genes.csv"
+  )
+)
+
+training_genes <- training_genes %>% 
+  map(~ na.omit(.x))
+
+# Rename list headers
+training_gene_list_names <- c(
+  "GWAS_training_genes",
+  "DisGeNET_training_genes",
+  "Clinvar_training_genes",
+  "Union_training_genes"
+)
+
+names(training_genes) <- training_gene_list_names
+
+training_genes[["common_genes"]] <- "PLACEHOLDER"
+
+# Check list
+training_genes %>% 
+  str()
+```
+
+```{r Check that mapped genes were not used for training DGLinker model}
+magma_gene_pval_files_mapped %>% 
+  map2(training_genes,
+       function(x, y){
+         
+         # Save the genes from MAGMA file into a vector
+         magma_genes <- x %>% 
+           pull(SYMBOL)
+         
+         # Count no. of MAGMA genes that were used for training
+         x[magma_genes %in% y, ] %>% 
+           nrow()
+
+       })
+```
+
+# Find N validated genes
+
+## Original GWAS
+
+```{r Read in pvals for snps mapped to genes in original GWAS}
+original_GWAS_pvals <- read_csv(
+  file = paste0(
+    analysis_folder_path,
+    "FUMA results/FUMA_original_GWAS/Useful_files/original_GWAS_pvals.csv"
+  )
+)
+
+# Check
+original_GWAS_pvals %>% 
+  dim()
+
+original_GWAS_pvals %>% 
+  head()
+```
+
+```{r Remove duplicate genes in mapped original GWAS}
+original_GWAS_pvals <- original_GWAS_pvals %>% 
+  distinct(SYMBOL, .keep_all = TRUE)
+
+# Check
+original_GWAS_pvals %>% 
+  dim()
+```
+
+```{r Create bonferroni thresholds}
+original_bonferroni_threshold <- 0.05 / nrow(original_GWAS_pvals)
+
+bonferroni_threshold_list <- magma_gene_pval_files_mapped %>% 
+  map(~ 0.05 / nrow(.x))
+
+# Check
+paste("Original bonferroni threshold is:", original_bonferroni_threshold)
+bonferroni_threshold_list
+```
+
+```{r Create column denoting significance at the original bonferroni threshold}
+original_GWAS_pvals <- original_GWAS_pvals %>% 
+        mutate(original_adj_p = 
+                 case_when(
+                   P > original_bonferroni_threshold ~ 0,
+                   P <= original_bonferroni_threshold ~ 1
+                 )
+               )
+
+# Check N significant genes
+original_GWAS_pvals %>% 
+  count(original_adj_p)
+```
+
+```{r Save the originally significant genes into a vector}
+original_significant_genes <- original_GWAS_pvals %>% 
+  filter(original_adj_p == 1) %>%
+  distinct(SYMBOL, .keep_all = TRUE) %>% 
+  pull(SYMBOL)
+
+# Check
+original_significant_genes %>% 
+  length()
+
+original_significant_genes %>% 
+  head()
+```
+
+## Predicted gene lists
+
+```{r Create column denoting significance at original bonferroni threshold in MAGMA files}
+magma_gene_pval_files_mapped <- magma_gene_pval_files_mapped %>% 
+  map(~ .x %>% 
+        mutate(originally_significant = 
+                 case_when(
+                   P > original_bonferroni_threshold ~ 0,
+                   P <= original_bonferroni_threshold ~ 1
+                 )
+               )
+      )
+
+# Check new col
+magma_gene_pval_files_mapped %>% 
+  map(head)
+```
+
+```{r Create column denoting significance at new bonferroni threshold}
+magma_gene_pval_files_mapped <- magma_gene_pval_files_mapped %>% 
+  map2(bonferroni_threshold_list,
+       ~ .x %>% 
+        mutate(sig_at_adj_threshold = 
+                 case_when(
+                   P > .y ~ 0,
+                   P <= .y ~ 1
+                 )
+               )
+      )
+
+# Check new column
+magma_gene_pval_files_mapped %>% 
+  map(head)
+```
+
+```{r Create column denoting N validated genes}
+magma_gene_pval_files_mapped <- magma_gene_pval_files_mapped %>% 
+  map(~ .x %>% 
+        mutate(novel_validated_gene = 
+                 case_when(
+                   # If gene is sig at original and new threshold, 0
+                   originally_significant == 1 &
+                     sig_at_adj_threshold == 1 ~ 0,
+                   
+                   # If gene is sig at original threshold but not new threshold, 0
+                   originally_significant == 1 &
+                     sig_at_adj_threshold == 0 ~ 0,
+                   
+                   # If gene not sig at original threshold but sig at new threshold, 1
+                   originally_significant == 0 &
+                     sig_at_adj_threshold == 1 ~ 1,
+                   
+                   # If gene not sig at either threshold, 0
+                   originally_significant == 0 &
+                     sig_at_adj_threshold == 0 ~ 0
+                 )
+               )
+      )
+
+# Check new column
+magma_gene_pval_files_mapped %>% 
+  map(head)
+```
+
+```{r Check N genes significant at original bonferroni threshold}
+magma_gene_pval_files_mapped %>% 
+  map(~ .x %>% 
+        count(originally_significant))
+```
+
+```{r Check N genes significant at mapped bonferroni threshold}
+magma_gene_pval_files_mapped %>% 
+  map(~ .x %>% 
+        count(sig_at_adj_threshold))
+```
+
+```{r Check N validated genes}
+magma_gene_pval_files_mapped %>% 
+  map(~ .x %>% 
+        count(novel_validated_gene))
+```
+
+```{r Ensure that the validated genes are not in originally significant ones}
+# Create not in function
+'%not_in%' <- Negate('%in%')
+
+magma_gene_pval_files_mapped <- magma_gene_pval_files_mapped %>% 
+  map(~ .x %>% 
+        mutate(novel_validated_gene = 
+                 case_when(
+                   novel_validated_gene == 1 &
+                     SYMBOL %not_in% original_significant_genes ~ 1,
+                   
+                   novel_validated_gene == 1 &
+                     SYMBOL %in% original_significant_genes ~ 0,
+                   
+                   TRUE ~ 0
+                 )
+               )
+      )
+
+# Check
+magma_gene_pval_files_mapped %>% 
+  map(~ .x %>% 
+        count(novel_validated_gene))
+```
+
+```{r Ensure all the novel validated genes are all unqiue genes}
+magma_gene_pval_files_mapped %>% 
+  map(~ .x %>% 
+        filter(novel_validated_gene == 1) %>%
+        distinct(SYMBOL, .keep_all = TRUE) %>% 
+        nrow()
+      )
+```
+
+```{r Ensure all novel validated genes do not have smaller P than original threshold}
+magma_gene_pval_files_mapped %>% 
+  map(~ .x %>% 
+        filter(novel_validated_gene == 1 &
+                 P < original_bonferroni_threshold) %>% 
+        nrow()
+      )
+```
+
+```{r Recode novel validated gene to 0 if its a known scz gene used for training}
+# Save all the unique DGLinker training genes into vector
+all_training_genes <- training_genes$Union_training_genes
+
+magma_gene_pval_files_mapped <- magma_gene_pval_files_mapped %>% 
+  map(function(x){
+    
+    # Extract the validated gene names
+    validated_gene_names <- x %>% 
+    filter(novel_validated_gene == 1) %>% 
+    pull(SYMBOL)
+  
+  # Recode training genes appearing in validated genes to 0
+  x %>% 
+    mutate(novel_validated_gene = 
+             case_when(
+               novel_validated_gene == 1 &
+                 SYMBOL %in% all_training_genes ~ 0,
+               
+               novel_validated_gene == 1 &
+                 SYMBOL %not_in% all_training_genes ~ 1,
+               
+               TRUE ~ 0
+             ))
+    })
+
+# Check
+magma_gene_pval_files_mapped %>% 
+  map(~ .x %>% 
+        count(novel_validated_gene))
+```
+
+# Find out N genes significant at new threshold for each list
+
+Previously, the script found the new validated genes by looking at the genes that were not already known to be sigificant but were significant at the new Bonferroni threshold.
+
+Subsequently, it is important to know how many unknown genes for each list are significant at the new Bonferroni threshold - including the genes that weren't predicted by DGLinker.
+
+```{r Create column denoting significance at original bonferroni threshold in MAGMA files}
+magma_gene_pval_files <- magma_gene_pval_files %>% 
+  map(~ .x %>% 
+        mutate(originally_significant = 
+                 case_when(
+                   P > original_bonferroni_threshold ~ 0,
+                   P <= original_bonferroni_threshold ~ 1
+                 )
+               )
+      )
+
+# Check new col
+magma_gene_pval_files %>% 
+  map(head)
+```
+
+```{r Create column denoting significance at new bonferroni threshold}
+magma_gene_pval_files <- magma_gene_pval_files %>% 
+  map2(bonferroni_threshold_list,
+       ~ .x %>% 
+        mutate(sig_at_adj_threshold = 
+                 case_when(
+                   P > .y ~ 0,
+                   P <= .y ~ 1
+                 )
+               )
+      )
+
+# Check new column
+magma_gene_pval_files %>% 
+  map(head)
+```
+
+```{r Create column denoting N validated genes}
+magma_gene_pval_files <- magma_gene_pval_files %>% 
+  map(~ .x %>% 
+        mutate(novel_validated_gene = 
+                 case_when(
+                   # If gene is sig at original and new threshold, 0
+                   originally_significant == 1 &
+                     sig_at_adj_threshold == 1 ~ 0,
+                   
+                   # If gene is sig at original threshold but not new threshold, 0
+                   originally_significant == 1 &
+                     sig_at_adj_threshold == 0 ~ 0,
+                   
+                   # If gene not sig at original threshold but sig at new threshold, 1
+                   originally_significant == 0 &
+                     sig_at_adj_threshold == 1 ~ 1,
+                   
+                   # If gene not sig at either threshold, 0
+                   originally_significant == 0 &
+                     sig_at_adj_threshold == 0 ~ 0
+                 )
+               )
+      )
+
+# Check new column
+magma_gene_pval_files %>% 
+  map(head)
+```
+
+```{r Check N genes significant at original bonferroni threshold}
+magma_gene_pval_files %>% 
+  map(~ .x %>% 
+        count(originally_significant))
+```
+
+```{r Check N genes significant at mapped bonferroni threshold}
+magma_gene_pval_files %>% 
+  map(~ .x %>% 
+        count(sig_at_adj_threshold))
+```
+
+```{r Check N validated genes}
+magma_gene_pval_files %>% 
+  map(~ .x %>% 
+        count(novel_validated_gene))
+```
+
+```{r Ensure that the validated genes are not in originally significant ones}
+magma_gene_pval_files <- magma_gene_pval_files %>% 
+  map(~ .x %>% 
+        mutate(novel_validated_gene = 
+                 case_when(
+                   novel_validated_gene == 1 &
+                     SYMBOL %not_in% original_significant_genes ~ 1,
+                   
+                   novel_validated_gene == 1 &
+                     SYMBOL %in% original_significant_genes ~ 0,
+                   
+                   TRUE ~ 0
+                 )
+               )
+      )
+
+# Check
+magma_gene_pval_files %>% 
+  map(~ .x %>% 
+        count(novel_validated_gene))
+```
+
+```{r Ensure all the novel validated genes are all unqiue genes}
+magma_gene_pval_files %>% 
+  map(~ .x %>% 
+        filter(novel_validated_gene == 1) %>%
+        distinct(SYMBOL, .keep_all = TRUE) %>% 
+        nrow()
+      )
+```
+
+```{r Ensure all novel validated genes do not have smaller P than original threshold}
+magma_gene_pval_files %>% 
+  map(~ .x %>% 
+        filter(novel_validated_gene == 1 &
+                 P < original_bonferroni_threshold) %>% 
+        nrow()
+      )
+```
+
+```{r Recode novel validated gene to 0 if its a known scz gene used for training}
+magma_gene_pval_files <- magma_gene_pval_files %>% 
+  map(function(x){
+    
+    # Extract the validated gene names
+    validated_gene_names <- x %>% 
+    filter(novel_validated_gene == 1) %>% 
+    pull(SYMBOL)
+  
+  # Recode training genes appearing in validated genes to 0
+  x %>% 
+    mutate(novel_validated_gene = 
+             case_when(
+               novel_validated_gene == 1 &
+                 SYMBOL %in% all_training_genes ~ 0,
+               
+               novel_validated_gene == 1 &
+                 SYMBOL %not_in% all_training_genes ~ 1,
+               
+               TRUE ~ 0
+             ))
+    })
+
+# Check
+magma_gene_pval_files %>% 
+  map(~ .x %>% 
+        count(novel_validated_gene))
+```
+
+# Inspect (mapped) validated genes
+
+```{r Order the original genes from smallest p-value to largest}
+original_GWAS_pvals <- original_GWAS_pvals %>% 
+  arrange(P)
+
+# Check
+original_GWAS_pvals %>% 
+  head()
+```
+
+```{r Order the validated genes from smallest p-value to largest}
+magma_gene_pval_files_mapped <- magma_gene_pval_files_mapped %>% 
+  map(~ .x %>% 
+        arrange(desc(novel_validated_gene), P))
+
+# Check
+magma_gene_pval_files_mapped %>% 
+  map(head)
+```
+
+```{r Inspect validated genes}
+magma_gene_pval_files_mapped %>% 
+  map(~ .x %>% 
+        filter(novel_validated_gene == 1))
+```
+
+```{r Inspect validated gene names}
+validated_genes_list <- magma_gene_pval_files_mapped %>% 
+  map(~ .x %>% 
+        filter(novel_validated_gene == 1) %>% 
+        pull(SYMBOL))
+
+# Check validated genes
+validated_genes_list
+```
+
+## Create plots
+
+### Venn diagram of (mapped) validated genes
+
+```{r Rename the list entries}
+validate_gene_list_names <- c(
+  "GWAS",
+  "DisGeNET",
+  "Clinvar",
+  "Union",
+  "Common"
+)
+
+names(validated_genes_list) <- validate_gene_list_names
+```
+
+```{r Create vector with colours for plot}
+colours <- c(
+  'blue', 
+  'red',
+  'green',
+  'orange',
+  'yellow'
+)
+
+label_names <- c(
+  "GWAS",
+  "DisGeNET",
+  "Clinvar",
+  "Union",
+  "Common"
+)
+
+my_color <- setNames(colours, label_names)
+```
+
+```{r Create venn diagram to show validated genes, fig.width=4}
+validated_gene_venn <- Venn(validated_genes_list)
+d_validated <- process_data(validated_gene_venn)
+
+d2_validated <- process_data(validated_gene_venn)
+d2_validated@region <- st_polygonize(d_validated@setEdge)
+
+# Create venn diagram
+ggplot() +
+  geom_sf(aes(fill = name), data = venn_region(d2_validated)) +
+  geom_sf(aes(color = name), data = venn_setedge(d_validated)) +
+  geom_sf_text(aes(label = name), size = 3, data = venn_setlabel(d_validated)) +
+  geom_sf_text(aes(label = count), data = venn_region(d_validated)) +
+  scale_color_manual(values = alpha(my_color, .2)) +
+  scale_fill_manual(values = alpha(my_color, .2)) +
+  theme_void() +
+  theme(legend.title = element_blank())
+```
+
+```{r Find the common validated genes}
+common_validated_genes <- Reduce(
+  intersect,
+  validated_genes_list
+)
+
+common_validated_genes
+```
+
+```{r Find the distinct validated genes}
+# Combine all the genes into a vector
+distinct_validated_genes <- validated_genes_list %>% 
+  reduce(c)
+
+# Convert genes to a tibble
+distinct_validated_genes <- distinct_validated_genes %>% 
+  as_tibble()
+
+# Rename default 'value' column
+distinct_validated_genes <- distinct_validated_genes %>% 
+  rename("validated_gene" = "value")
+
+# Get the distinct genes
+distinct_validated_genes <- distinct_validated_genes %>% 
+  distinct(validated_gene)
+
+# Check
+distinct_validated_genes %>% 
+  dim()
+
+distinct_validated_genes$validated_gene
+```
+
+```{r Create columns showing which lists validated which genes}
+validated_column_names <- c(
+  "GWAS",
+  "DisGeNET",
+  "Clinvar",
+  "Union",
+  "Common"
+)
+
+# Find out which genes were validated by each list
+distinct_validated_genes_summary <- validated_genes_list %>% 
+  map2(validated_column_names,
+       function(x, y){
+         distinct_validated_genes <- distinct_validated_genes %>% 
+           mutate({{ y }} :=
+                    validated_gene %in% x)
+         
+         distinct_validated_genes
+       }
+       )
+
+# Join the separate lists together
+distinct_validated_genes_summary <- distinct_validated_genes_summary %>% 
+  reduce(full_join)
+
+# Check
+distinct_validated_genes_summary
+```
+
+### Grouped bar chart of the (mapped) validated genes
+
+```{r Filter the validated genes in each list}
+mapped_validated_genes <- magma_gene_pval_files_mapped %>% 
+  map(~ .x %>% 
+        filter(novel_validated_gene == 1))
+
+# Check
+mapped_validated_genes %>% 
+  map(nrow)
+```
+
+```{r Create frequency tables for the validated genes' chromosomes}
+mapped_validated_genes <- mapped_validated_genes %>% 
+  map(~ .x %>% 
+        count(CHR,
+              name = "freq"))
+
+# Check
+mapped_validated_genes %>% 
+  map(head)
+```
+
+```{r Create column to say what list the genes belong to}
+mapped_validated_genes <- mapped_validated_genes %>% 
+  map2(label_names,
+       ~ .x %>% 
+        mutate(gene_list = 
+                 .y))
+
+# Check
+mapped_validated_genes %>% 
+  map(head)
+```
+
+```{r Combine the lists together}
+mapped_validated_genes <- mapped_validated_genes %>% 
+  reduce(bind_rows)
+
+# Check
+mapped_validated_genes %>% 
+  dim()
+
+mapped_validated_genes %>% 
+  count(gene_list)
+```
+
+```{r Turn gene list into a factor}
+mapped_validated_genes <- mapped_validated_genes %>% 
+  mutate(gene_list = 
+           factor(gene_list,
+                  levels = c("GWAS",
+                             "DisGeNET",
+                             "Clinvar",
+                             "Union",
+                             "Common")
+                  )
+         )
+
+# Check
+mapped_validated_genes %>% 
+  count(gene_list)
+```
+
+```{r Create bar chart to show distribution of validated genes across chroms}
+mapped_validated_genes %>% 
+  ggplot(aes(x = CHR,
+             y = freq,
+             fill = gene_list
+             )) +
+    geom_bar(stat = 'identity', colour = "black", alpha = 0.8) +
+  labs(y = "N", 
+       x = "Chromosome") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black")) +
+  facet_wrap(~ gene_list, scales = "free_x") +
+  scale_fill_manual(values = colours) +
+  theme(strip.text = element_text(colour = "black")) +
+  guides(fill = guide_legend(title = "Gene list"))
+```
+
+## Save the updated MAGMA files
+### Updated MAGMA files
+
+```{r Append the original MAGMA p-value results to the validation results}
+magma_gene_pval_files_mapped[["original_GWAS_MAGMA_pvals"]] <- original_GWAS_pvals
+```
+
+```{r Save all MAGMA gene based results into a single excel file}
+# Ensure scientific notation is used
+options(scipen=0)
+
+# Save files
+write.xlsx(
+  magma_gene_pval_files_mapped,
+  file = paste0(
+    analysis_folder_path,
+    "Validation analyses/GWAS_validation_results/MAGMA_gene_based_summary.xlsx"
+  )
+)
+```
+
+### Distinct validated genes file
+
+```{r Save the disinct validated genes summary}
+distinct_validated_genes_summary %>% 
+  write_csv(
+    paste0(
+      analysis_folder_path,
+      "Validation analyses/GWAS_validation_results/distinct_validated_genes_summary.csv"
+    )
+  )
+```
+
+# Create gene set files for MAGMA gene-set analysis
+
+To perform MAGMA gene-set analysis, a text file is needed to map all the genes to a given set. E.g:
+
+-   Gene set 1 GENE1, GENE3
+-   Gene set 2 GENE2, GENE4
+
+In this context, gene set 1 will be all the genes in the SNP2Gene data for all the schizophrenia summary statistics that were not in the SNP2Gene data for the intersection data from another list. Gene 2 will be all the genes that were obtained from SNP2Gene after submitting an intersection file.
+
+## Format gene set 1
+
+```{r From original SNP2Gene data - remove genes from each list}
+iterations <- seq(1, 5, 1)
+
+Gene_set_1_list <- iterations %>% 
+  map2(magma_gene_pval_files,
+       function(x, y){
+         
+         # Extract the genes from gene list
+         genes <- y %>% 
+           pull(SYMBOL)
+         
+         # Filter original GWAS pval data to only contain non-matching genes
+         original_GWAS_pvals %>% 
+           filter(SYMBOL %not_in% genes)
+       })
+
+# Check
+Gene_set_1_list %>% 
+  map(nrow)
+```
+
+```{r Check that right number of genes were removed}
+magma_gene_pval_files %>% 
+  map(~ nrow(original_GWAS_pvals) - nrow(.x))
+```
+
+```{r Format the gene set 1 genes for each list}
+Gene_set_1_list_format <- Gene_set_1_list %>% 
+  map(function(x){
+    
+    # Pull gene symbols
+    genes <- x %>% 
+      pull(GENE)
+    
+    # Collapse symbols by tab
+    paste0(genes, collapse = "    ") %>% 
+      paste("Gene_set_1", ., sep = "    ")
+  })
+
+# Check
+Gene_set_1_list_format %>% 
+  str()
+```
+
+```{r Rename character vectors in list}
+gene_set_1_names <- c(
+  "Gene_set_1_GWAS",
+  "Gene_set_1_DisGeNET",
+  "Gene_set_1_Clinvar",
+  "Gene_set_1_Union",
+  "Gene_set_1_Common"
+)
+
+names(Gene_set_1_list_format) <- gene_set_1_names
+
+# Check
+Gene_set_1_list_format %>% 
+  str()
+```
+
+## Format gene set 2
+
+```{r Create single character vector with genes in gene set 2}
+Gene_set_2_list <- magma_gene_pval_files %>% 
+  map(function(x){
+    
+    # Pull gene identifiers
+    genes <- x %>% 
+      pull(GENE)
+    
+    # Collapse symbols by tab
+    paste0(genes, collapse = "    ") %>% 
+      paste("Gene_set_2", ., sep = "    ")
+  })
+
+# Check
+Gene_set_2_list %>% 
+  str()
+```
+
+```{r Rename character vectors in gene set 2 list}
+gene_set_2_names <- c(
+  "Gene_set_2_GWAS",
+  "Gene_set_2_DisGeNET",
+  "Gene_set_2_Clinvar",
+  "Gene_set_2_Union",
+  "Gene_set_2_Common"
+)
+
+names(Gene_set_2_list) <- gene_set_2_names
+
+# Check
+Gene_set_2_list %>% 
+  str()
+```
+
+### Export gene set 1-2 vectors to text files
+
+```{r Define file names}
+magma_gene_set_file_names <- c(
+  "GWAS_gene_set.txt",
+  "DisGeNET_gene_set.txt",
+  "Clinvar_gene_set.txt",
+  "Union_gene_set.txt",
+  "Common_gene_set.txt"
+)
+
+# Check
+magma_gene_set_file_names
+```
+
+```{r Save gene set files}
+for (i in seq_along(1:5)){
+  writeLines(
+    c(Gene_set_1_list_format[[i]], 
+      Gene_set_2_list[[i]]),
+    paste0(
+      analysis_folder_path,
+      "magma_v1.10_mac/",
+      magma_gene_set_file_names[i]
+    )
+  )
+}
+```
+
+# Create additional files for MAGMA gene-set analysis
+
+05/06/2023: After performing MAGMA gene set analysis, an interesting question that arose was whether there would be any residual genetic signal after removing the genes that were validated by each list. Therefore, will create new gene set files where the validated genes for each list have been removed.
+
+## Gene set file 1 without validated genes
+
+Note: Each gene set file 1 for each list contains all genes except ones in the current MAGMA file and the novel validated genes for that list.
+
+```{r Remove validated genes from SNP2Gene data for original GWAS summary stats}
+Gene_set_1_novalidated_list <- validated_genes_list %>% 
+  map2(magma_gene_pval_files,
+       function(x, y){
+         
+         # Extract the genes from gene list
+         genes <- y %>% 
+           pull(SYMBOL)
+         
+         # Filter original GWAS pval data to remove genes from each MAGMA list
+         set_1_file <- original_GWAS_pvals %>% 
+           filter(SYMBOL %not_in% genes)
+
+        # Filter all set 1 files to remove all unique validated genes
+         set_1_file %>% 
+           filter(SYMBOL %not_in% y)
+         
+       })
+
+# Check
+Gene_set_1_novalidated_list %>% 
+  map(nrow)
+```
+
+```{r Compare new gene set 1 no validated numbers to original gene set 1}
+Gene_set_1_list %>% 
+  map2(Gene_set_1_novalidated_list,
+       ~ nrow(.y) - nrow(.x)) # Subtract length of each original list from each new one
+```
+
+```{r Format the new gene set file 1 lists into text format}
+Gene_set_1_novalidated_list <- Gene_set_1_novalidated_list %>% 
+  map(function(x){
+    
+    # Pull gene symbols
+    genes <- x %>% 
+      pull(GENE)
+    
+    # Collapse symbols by tab
+    paste0(genes, collapse = "    ") %>% 
+      paste("Gene_set_1", ., sep = "    ")
+  })
+
+# Check
+Gene_set_1_novalidated_list %>% 
+  str()
+```
+
+```{r Rename character vectors in gene set 1 no validated list}
+gene_set_1_novalidated_names <- c(
+  "Gene_set_1_novalidated_GWAS",
+  "Gene_set_1_novalidated_DisGeNET",
+  "Gene_set_1_novalidated_Clinvar",
+  "Gene_set_1_novalidated_Union",
+  "Gene_set_1_novalidated_Common"
+)
+
+names(Gene_set_1_novalidated_list) <- gene_set_1_novalidated_names
+
+# Check
+Gene_set_1_novalidated_list %>% 
+  str()
+```
+
+## Gene set file 2 without validated genes
+
+```{r Create single character vector with genes in gene set 2}
+Gene_set_2_novalidated_list <- magma_gene_pval_files %>% 
+  map2(validated_genes_list,
+       function(x, y){
+    
+    # Exclude all validated genes from each list
+    genes <- x %>% 
+      filter(SYMBOL %not_in% y) %>% 
+      pull(GENE)
+    
+    # Collapse symbols by tab
+    paste0(genes, collapse = "    ") %>% 
+      paste("Gene_set_2", ., sep = "    ")
+  })
+
+# Check
+Gene_set_2_novalidated_list %>% 
+  str()
+```
+
+```{r Check how many genes were removed from each list}
+magma_gene_pval_files %>% 
+  map2(validated_genes_list,
+       function(x, y){
+    
+    # Filter all genes for each list while all excluding non-validated genes
+    genes <- x %>% 
+      filter(SYMBOL %not_in% y)
+    
+    # Subtract length of original list of genes from new list
+    nrow(genes) - nrow(x)
+       })
+```
+
+```{r Rename character vectors in gene set 2 no validated list}
+gene_set_2_novalidated_names <- c(
+  "Gene_set_2_novalidated_GWAS",
+  "Gene_set_2_novalidated_DisGeNET",
+  "Gene_set_2_novalidated_Clinvar",
+  "Gene_set_2_novalidated_Union",
+  "Gene_set_2_novalidated_Common"
+)
+
+names(Gene_set_2_novalidated_list) <- gene_set_2_novalidated_names
+
+# Check
+Gene_set_2_novalidated_list %>% 
+  str()
+```
+
+### Export gene set 1-2 no validated vectors to text files
+
+```{r Define file names}
+magma_gene_set_novalidated_file_names <- c(
+  "GWAS_gene_set_noval.txt",
+  "DisGeNET_gene_set_noval.txt",
+  "Clinvar_gene_set_noval.txt",
+  "Union_gene_set_noval.txt",
+  "Common_gene_set_noval.txt"
+)
+
+# Check
+magma_gene_set_novalidated_file_names
+```
+
+```{r Save gene set files}
+for (i in seq_along(1:5)){
+  writeLines(
+    c(Gene_set_1_novalidated_list[[i]], 
+      Gene_set_2_novalidated_list[[i]]),
+    paste0(
+      analysis_folder_path,
+      "magma_v1.10_mac/",
+      magma_gene_set_novalidated_file_names[i]
+    )
+  )
+}
+```
